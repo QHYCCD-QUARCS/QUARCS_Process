@@ -1,0 +1,27 @@
+[
+{
+  "directory": "/home/quarcs/workspace/QUARCS/QUARCS_Process/build",
+  "command": "/usr/bin/c++ -DQT_CORE_LIB -DQT_NETWORK_LIB -DQT_WEBSOCKETS_LIB -I/home/quarcs/workspace/QUARCS/QUARCS_Process/build/websocketclient_autogen/include -isystem /usr/include/x86_64-linux-gnu/qt5 -isystem /usr/include/x86_64-linux-gnu/qt5/QtCore -isystem /usr/lib/x86_64-linux-gnu/qt5/mkspecs/linux-g++ -isystem /usr/include/x86_64-linux-gnu/qt5/QtWebSockets -isystem /usr/include/x86_64-linux-gnu/qt5/QtNetwork -g -fPIC -std=gnu++11 -o CMakeFiles/websocketclient.dir/websocketclient_autogen/mocs_compilation.cpp.o -c /home/quarcs/workspace/QUARCS/QUARCS_Process/build/websocketclient_autogen/mocs_compilation.cpp",
+  "file": "/home/quarcs/workspace/QUARCS/QUARCS_Process/build/websocketclient_autogen/mocs_compilation.cpp"
+},
+{
+  "directory": "/home/quarcs/workspace/QUARCS/QUARCS_Process/build",
+  "command": "/usr/bin/c++ -DQT_CORE_LIB -DQT_NETWORK_LIB -DQT_WEBSOCKETS_LIB -I/home/quarcs/workspace/QUARCS/QUARCS_Process/build/websocketclient_autogen/include -isystem /usr/include/x86_64-linux-gnu/qt5 -isystem /usr/include/x86_64-linux-gnu/qt5/QtCore -isystem /usr/lib/x86_64-linux-gnu/qt5/mkspecs/linux-g++ -isystem /usr/include/x86_64-linux-gnu/qt5/QtWebSockets -isystem /usr/include/x86_64-linux-gnu/qt5/QtNetwork -g -fPIC -std=gnu++11 -o CMakeFiles/websocketclient.dir/websocketclient.cpp.o -c /home/quarcs/workspace/QUARCS/QUARCS_Process/src/websocketclient.cpp",
+  "file": "/home/quarcs/workspace/QUARCS/QUARCS_Process/src/websocketclient.cpp"
+},
+{
+  "directory": "/home/quarcs/workspace/QUARCS/QUARCS_Process/build",
+  "command": "/usr/bin/c++ -DQT_CORE_LIB -DQT_NETWORK_LIB -DQT_WEBSOCKETS_LIB -I/home/quarcs/workspace/QUARCS/QUARCS_Process/build/websocketclient_autogen/include -isystem /usr/include/x86_64-linux-gnu/qt5 -isystem /usr/include/x86_64-linux-gnu/qt5/QtCore -isystem /usr/lib/x86_64-linux-gnu/qt5/mkspecs/linux-g++ -isystem /usr/include/x86_64-linux-gnu/qt5/QtWebSockets -isystem /usr/include/x86_64-linux-gnu/qt5/QtNetwork -g -fPIC -std=gnu++11 -o CMakeFiles/websocketclient.dir/quarcsmonitor.cpp.o -c /home/quarcs/workspace/QUARCS/QUARCS_Process/src/quarcsmonitor.cpp",
+  "file": "/home/quarcs/workspace/QUARCS/QUARCS_Process/src/quarcsmonitor.cpp"
+},
+{
+  "directory": "/home/quarcs/workspace/QUARCS/QUARCS_Process/build",
+  "command": "/usr/bin/c++ -DQT_CORE_LIB -DQT_NETWORK_LIB -DQT_WEBSOCKETS_LIB -I/home/quarcs/workspace/QUARCS/QUARCS_Process/build/websocketclient_autogen/include -isystem /usr/include/x86_64-linux-gnu/qt5 -isystem /usr/include/x86_64-linux-gnu/qt5/QtCore -isystem /usr/lib/x86_64-linux-gnu/qt5/mkspecs/linux-g++ -isystem /usr/include/x86_64-linux-gnu/qt5/QtWebSockets -isystem /usr/include/x86_64-linux-gnu/qt5/QtNetwork -g -fPIC -std=gnu++11 -o CMakeFiles/websocketclient.dir/led.cpp.o -c /home/quarcs/workspace/QUARCS/QUARCS_Process/src/led.cpp",
+  "file": "/home/quarcs/workspace/QUARCS/QUARCS_Process/src/led.cpp"
+},
+{
+  "directory": "/home/quarcs/workspace/QUARCS/QUARCS_Process/build",
+  "command": "/usr/bin/c++ -DQT_CORE_LIB -DQT_NETWORK_LIB -DQT_WEBSOCKETS_LIB -I/home/quarcs/workspace/QUARCS/QUARCS_Process/build/websocketclient_autogen/include -isystem /usr/include/x86_64-linux-gnu/qt5 -isystem /usr/include/x86_64-linux-gnu/qt5/QtCore -isystem /usr/lib/x86_64-linux-gnu/qt5/mkspecs/linux-g++ -isystem /usr/include/x86_64-linux-gnu/qt5/QtWebSockets -isystem /usr/include/x86_64-linux-gnu/qt5/QtNetwork -g -fPIC -std=gnu++11 -o CMakeFiles/websocketclient.dir/main.cpp.o -c /home/quarcs/workspace/QUARCS/QUARCS_Process/src/main.cpp",
+  "file": "/home/quarcs/workspace/QUARCS/QUARCS_Process/src/main.cpp"
+}
+]

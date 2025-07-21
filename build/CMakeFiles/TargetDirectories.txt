@@ -1,0 +1,4 @@
+/home/quarcs/workspace/QUARCS/QUARCS_Process/build/CMakeFiles/websocketclient.dir
+/home/quarcs/workspace/QUARCS/QUARCS_Process/build/CMakeFiles/edit_cache.dir
+/home/quarcs/workspace/QUARCS/QUARCS_Process/build/CMakeFiles/rebuild_cache.dir
+/home/quarcs/workspace/QUARCS/QUARCS_Process/build/CMakeFiles/websocketclient_autogen.dir

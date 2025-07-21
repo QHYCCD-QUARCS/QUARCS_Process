@@ -1,3 +1,16 @@
 {
-    "cmake.sourceDirectory": "/home/quarcs/workspace/QUARCS/QUARCS_Process/src"
+  "cmake.sourceDirectory": "/home/quarcs/workspace/QUARCS/QUARCS_Process/src",
+  "typescript.validate.enable": true,
+  "typescript.suggest.autoImports": true,
+  "typescript.preferences.includePackageJsonAutoImports": "auto",
+  "typescript.suggest.includeCompletionsForModuleExports": true,
+  "typescript.suggest.includeCompletionsWithSnippetText": true,
+  "typescript.suggest.includeCompletionsWithClassMemberSnippets": true,
+  "typescript.suggest.includeCompletionsWithObjectLiteralMethodSnippets": true,
+  "typescript.suggest.includeCompletionsWithInsertText": true,
+  "typescript.suggest.includeCompletionsWithReplaceText": true,
+  "typescript.tsserver.experimental.enableProjectDiagnostics": false,
+  "typescript.tsserver.exclude": [
+    "node_modules"
+  ]
 }

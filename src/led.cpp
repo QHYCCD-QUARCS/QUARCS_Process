@@ -1,5 +1,6 @@
 #include "led.h"
-
+ 
+ 
 #define LED_PATH "/sys/class/leds/"
 #define MODEL_PATH "/proc/device-tree/model"
 
