@@ -613,7 +613,7 @@ void QuarcsMonitor::onUnzipFinished(int exitCode, QProcess::ExitStatus exitStatu
 void QuarcsMonitor::onUnzipError(QProcess::ProcessError error)
 {
     qDebug() << "解压过程出错:" << error;
-    websocketClient->messageSend("update_error:0:Error during extraction process:" + error.toString());
+    websocketClient->messageSend("update_error:0:Error during extraction process");
 
     // 顺序更新模式下，解压过程报错同样要中止整个顺序更新队列
     if (isSequentialUpdate)
