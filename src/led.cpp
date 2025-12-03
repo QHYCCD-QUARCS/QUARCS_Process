@@ -48,7 +48,8 @@ void Led::initLed()
 
 void Led::openLed()
 {
-    QString command = "echo 1 | sudo tee "+LedPath+"/brightness";
+    // 使用 tee 时会在终端打印 1，这里将输出重定向到 /dev/null，避免打印 0/1
+    QString command = "echo 1 | sudo tee "+LedPath+"/brightness > /dev/null";
     int result = system(command.toStdString().c_str());
     if (result != 0) {
         qDebug() << "Failed to open LED";
@@ -57,7 +58,8 @@ void Led::openLed()
 
 void Led::closeLed()
 {
-    QString command = "echo 0 | sudo tee "+LedPath+"/brightness";
+    // 同样屏蔽关闭时的 0 输出
+    QString command = "echo 0 | sudo tee "+LedPath+"/brightness > /dev/null";
     int result = system(command.toStdString().c_str());
     if (result != 0) {
         qDebug() << "Failed to close LED";
@@ -85,10 +87,10 @@ void Led::triggerLed(bool enable)
     QString command;
     if (enable) {
         // 启用默认触发器
-        command = "echo mmc0 | sudo tee "+LedPath+"/trigger";
+        command = "echo mmc0 | sudo tee "+LedPath+"/trigger > /dev/null";
     } else {
         // 禁用触发器
-        command = "echo none | sudo tee "+LedPath+"/trigger";
+        command = "echo none | sudo tee "+LedPath+"/trigger > /dev/null";
     }
     int result = system(command.toStdString().c_str());
     if (result == 0) {

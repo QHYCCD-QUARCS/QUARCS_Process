@@ -9,6 +9,7 @@
 #include <QDir>
 #include <QDateTime>
 #include <QTimer>
+#include <QStringList>
 
 #include "websocketclient.h"
 #include "led.h"
@@ -52,6 +53,7 @@ private:
     bool isRestarting = false; // 标记是否正在重启QT服务器
     QDateTime restartStartTime; // 重启开始时间
     const int restartTimeout = 30; // 重启超时时间(秒)
+    QDateTime lastTestQtServerProcessTime; // 上次发送 testQtServerProcess 的时间，用于限流
     QString UpdatePackPath = "/var/www/update_pack/";
     QString vueClientVersion = "";
     QString currentMaxClientVersion = "";
@@ -63,6 +65,19 @@ private:
     QTimer *networkRetryTimer = nullptr;
     int retryCount = 0;
     const int maxRetries = 20;
+
+    // 全局版本与顺序更新相关
+    QString totalVersion;                 // 当前全局总版本号（从环境变量读取）
+    QStringList pendingUpdateVersions;    // 待顺序执行的更新版本列表（升序）
+    bool isSequentialUpdate = false;      // 是否处于顺序更新流程中
+    int currentUpdateIndex = -1;          // 当前正在执行的更新索引
+
+    // Qt 服务器运行状态，用于只在状态变化（特别是“由运行变为停止”）时打印/上报
+    bool lastQtServerRunning = false;
+
+    // 启动/推进顺序更新流程
+    void startSequentialUpdate();
+    void startNextUpdateInQueue();
 };
 
 #endif // QUARCSMONITOR_H

@@ -1,5 +1,47 @@
 #include "quarcsmonitor.h"
 #include <unistd.h>
+#include <algorithm>
+
+// 辅助函数：将版本号字符串转换为可比较的整数
+// 支持格式：
+//  - x.y.z  （语义化版本号）
+//  - 纯数字（兼容旧版本号，如 20251127）
+static int parseVersionToInt(const QString &versionStr, bool &ok)
+{
+    ok = false;
+
+    QString v = versionStr.trimmed();
+    if (v.isEmpty())
+        return 0;
+
+    // 优先解析 x.y.z 语义化版本
+    const QStringList parts = v.split('.');
+    if (parts.size() == 3)
+    {
+        bool ok1 = false, ok2 = false, ok3 = false;
+        int major = parts[0].toInt(&ok1);
+        int minor = parts[1].toInt(&ok2);
+        int patch = parts[2].toInt(&ok3);
+
+        if (ok1 && ok2 && ok3 && major >= 0 && minor >= 0 && patch >= 0)
+        {
+            ok = true;
+            // 按权重组合，保证可比较性
+            return major * 1000000 + minor * 1000 + patch;
+        }
+    }
+
+    // 回退到纯数字版本（兼容老版本）
+    bool okInt = false;
+    int val = v.toInt(&okInt);
+    if (okInt)
+    {
+        ok = true;
+        return val;
+    }
+
+    return 0;
+}
 
 QuarcsMonitor::QuarcsMonitor(QObject *parent) : QObject(parent)
 {
@@ -16,6 +58,19 @@ QuarcsMonitor::QuarcsMonitor(QObject *parent) : QObject(parent)
     led->setLedSpeed("fast");
 
     isRestarting = false; // 初始化重启标志
+
+    // 读取全局总版本号（来自环境变量 QUARCS_TOTAL_VERSION）
+    QByteArray envVersion = qgetenv("QUARCS_TOTAL_VERSION");
+    if (envVersion.isEmpty())
+    {
+        totalVersion = "0.0.0";
+    }
+    else
+    {
+        totalVersion = QString::fromUtf8(envVersion);
+    }
+    qDebug() << "QuarcsMonitor 当前全局总版本号:" << totalVersion;
+
     QTimer::singleShot(1000, this, &QuarcsMonitor::monitorProcess);
 }
 
@@ -27,10 +82,31 @@ void QuarcsMonitor::monitorProcess()
     process.waitForFinished();
     QString output = process.readAllStandardOutput();
     // 如果进程正在运行，output将不会为空
-    if (output.isEmpty() || output == "") {
+    bool processRunning = !(output.isEmpty() || output == "");
+
+    if (!processRunning) {
+        // 如果当前处于顺序更新流程中，则认为 QT 服务器可能因更新而暂时关闭，
+        // 不再向前端反复上报“未启动/阻塞”的错误，避免干扰更新进度 UI。
+        if (isSequentialUpdate)
+        {
+            qDebug() << "QT server is not running, but update sequence is in progress. "
+                     << "Skip qtServerIsOver notifications during update.";
+            QTimer::singleShot(1000, this, &QuarcsMonitor::monitorProcess);
+            return;
+        }
+
+        // 只有在“之前认为服务器是运行状态 / 已经成功启动”时，
+        // 才在第一次检测到进程不存在时打印/上报一次“进程结束”日志，避免持续刷屏。
+        if (lastQtServerRunning || qtServerInitSuccess)
+        {
+            led->setLedSpeed("slow");
+            qDebug() << "QTServerProcessOver:The Qt server has unexpectedly shut down or has not started.";
+        }
+
+        // 标记当前为“未运行”状态
+        lastQtServerRunning = false;
+
         // websocketClient->messageSend("QTServerProcess:The Qt server has unexpectedly shut down or has not started.");
-        led->setLedSpeed("slow");
-        qDebug() << "QTServerProcessOver:The Qt server has unexpectedly shut down or has not started.";
         
         // 检查是否处于重启过程中且已超时
         if (isRestarting) {
@@ -54,8 +130,40 @@ void QuarcsMonitor::monitorProcess()
         
         QTimer::singleShot(1000, this, &QuarcsMonitor::monitorProcess);
     } else {
+        // 检测到进程存在
         qtServerInitSuccess = false;
-        websocketClient->messageSend("testQtServerProcess");
+        lastQtServerRunning = true;
+        
+        // 发送检测 / 重启相关信号时做 30 秒节流控制：
+        // 一次发送后，30 秒内不再重复发送，避免过于频繁。
+        QDateTime now = QDateTime::currentDateTime();
+        bool canSendTestSignal = false;
+        if (!lastTestQtServerProcessTime.isValid())
+        {
+            // 从未发送过，可以发送
+            canSendTestSignal = true;
+        }
+        else
+        {
+            int secsDiff = lastTestQtServerProcessTime.secsTo(now);
+            if (secsDiff >= 30)
+            {
+                canSendTestSignal = true;
+            }
+            else
+            {
+                // qDebug() << "距离上次 testQtServerProcess 发送仅过去"
+                //          << secsDiff << "秒，小于 30 秒，本次不再发送检测信号";
+            }
+        }
+
+        if (canSendTestSignal)
+        {
+            websocketClient->messageSend("testQtServerProcess");
+            lastTestQtServerProcessTime = now;
+            qDebug() << "发送 testQtServerProcess 检测信号";
+        }
+
         QTimer::singleShot(1000, this, SLOT(checkQtServerInitSuccess()));
         
         // 如果检测到进程且正在重启中，重置重启标志
@@ -68,26 +176,21 @@ void QuarcsMonitor::monitorProcess()
 
 void QuarcsMonitor::checkQtServerInitSuccess()
 {
-    if (qtServerInitSuccess) {
-        led->setLedSpeed("slow");
-        qDebug() << "QTServerProcess:The Qt server is running.";
-        checkQtServerLostCount = 0;
-    }else{
-        led->setLedSpeed("fast");
-        qDebug() << "QTServerProcessOver:The Qt server has not started or Qt server is blocked.";
-        
-        // 在重启过程中，不累加计数器
-        if (!isRestarting) {
-            checkQtServerLostCount++;
-            if (checkQtServerLostCount >= 60) {
-                websocketClient->messageSend("qtServerIsOver");
-            }
-        } else {
-            // 重置计数器，因为我们正在重启过程中
-            checkQtServerLostCount = 0;
-            qDebug() << "Resetting lost count during restart process";
+    // 在顺序更新过程中，不再向前端重复推送 QT 服务器未启动/阻塞的告警，
+    // 以免与更新进度信息混在一起，造成前端 UI 混乱。
+
+    // 在重启过程中，不累加计数器
+    if (!isRestarting) {
+        checkQtServerLostCount++;
+        if (checkQtServerLostCount >= 300) {
+            websocketClient->messageSend("qtServerIsOver");
         }
+    } else {
+        // 重置计数器，因为我们正在重启过程中
+        checkQtServerLostCount = 0;
+        qDebug() << "Resetting lost count during restart process";
     }
+
     QTimer::singleShot(1000, this, &QuarcsMonitor::monitorProcess);
 }
 
@@ -160,9 +263,10 @@ void QuarcsMonitor::receivedMessage(const QString &message)
         checkVueClientVersion();
     }else if (messageList[0] == "updateCurrentClient" && messageList.size() >= 2) {
         QString fileVersion = messageList[1];
-        qDebug() << "updateCurrentClient:" << fileVersion;
-        // 更新当前客户端
-        updateCurrentClient(fileVersion);
+        qDebug() << "收到前端更新请求(updateCurrentClient)，目标版本:" << fileVersion;
+        // 前端确认更新后，启动顺序更新流程（从当前全局版本依次更新到最新）
+        Q_UNUSED(fileVersion);
+        startSequentialUpdate();
     }else if (messageList[0] == "ForceUpdate") {
         qDebug() << "ForceUpdate";
         // 强制更新
@@ -198,7 +302,7 @@ void QuarcsMonitor::startQTServer()
         qDebug() << "Failed to re-run QT Server";
         isRestarting = false;
     } else {
-        qDebug() << "QT Server restart initiated, timeout set to" << restartTimeout << "seconds";
+        // qDebug() << "QT Server restart initiated, timeout set to" << restartTimeout << "seconds";
     }
 }
 
@@ -213,7 +317,18 @@ void QuarcsMonitor::killQTServer()
 void QuarcsMonitor::checkVueClientVersion(bool isForceUpdate)
 {
     qDebug() << "开始检查Vue客户端版本更新...";
-    qDebug() << "当前版本号：" << vueClientVersion;
+    // 使用全局总版本号而不是 VueClientVersion
+    qDebug() << "当前全局总版本号（字符串）：" << totalVersion;
+    bool okCurrent = false;
+    int currentVersion = parseVersionToInt(totalVersion, okCurrent);
+    if (!okCurrent)
+    {
+        qDebug() << "【警告】无法解析当前全局总版本号：" << totalVersion
+                 << "，将按 0.0.0 处理";
+        currentVersion = 0;
+    }
+    qDebug() << "当前全局总版本号（整数）：" << currentVersion;
+
     qDebug() << "更新包路径：" << UpdatePackPath;
     
     // 检查UpdatePackPath文件夹下是否存在更新包文件
@@ -233,52 +348,112 @@ void QuarcsMonitor::checkVueClientVersion(bool isForceUpdate)
             return;
         }
         
-        int currentVersion = vueClientVersion.toInt();
-        qDebug() << "当前版本号（整数）：" << currentVersion;
-        
+        // 清空顺序更新队列
+        pendingUpdateVersions.clear();
         int highestVersion = currentVersion;
         QString highestVersionFile;
         
-        // 查找最高版本的更新包
+        // 查找所有高于当前版本的更新包，并按版本号排序
         foreach (const QString &file, fileList) {
             qDebug() << "正在分析文件：" << file;
             
             // 提取版本号，允许文件名格式为：版本号.zip 或 版本号-其他信息.zip
-            QString baseName = file.split(".").at(0);
+            // 之前使用 file.split(\".\").at(0) 会把 \"1.0.2.zip\" 错误解析为 \"1\"
+            // 这里改为从最后一个 '.' 之前截取，得到完整的 \"1.0.2\" 部分
+            QString baseName = file;
+            int lastDotIndex = baseName.lastIndexOf('.');
+            if (lastDotIndex > 0) {
+                baseName = baseName.left(lastDotIndex);
+            }
             qDebug() << "  基本名称（去除扩展名）：" << baseName;
             
             QString versionStr = baseName.split("-").at(0);
             qDebug() << "  提取的版本号字符串：" << versionStr;
-            
-            bool ok;
-            int fileVersion = versionStr.toInt(&ok);
-            if (!ok) {
+
+            bool okFile = false;
+            int fileVersion = parseVersionToInt(versionStr, okFile);
+            if (!okFile) {
                 qDebug() << "  【错误】无法将'" << versionStr << "'解析为有效的版本号，跳过此文件";
                 continue;
             }
             
             qDebug() << "  文件版本号（整数）：" << fileVersion;
-            
-            if (fileVersion > highestVersion) {
-                qDebug() << "  发现更高版本：" << fileVersion << ">" << highestVersion;
-                highestVersion = fileVersion;
-                highestVersionFile = versionStr;
+
+            // 普通检查模式：只收集「高于当前版本」的包
+            // ForceUpdate 模式：不管当前认为是多少版本，把所有合法包都纳入顺序更新队列
+            bool shouldCollect = false;
+            if (isForceUpdate)
+            {
+                shouldCollect = true;
+            }
+            else
+            {
+                shouldCollect = (fileVersion > currentVersion);
+            }
+
+            if (shouldCollect) {
+                if (!isForceUpdate && fileVersion > currentVersion) {
+                    qDebug() << "  发现高于当前版本的更新包：" << fileVersion << ">" << currentVersion;
+                } else if (isForceUpdate) {
+                    qDebug() << "  ForceUpdate 模式下收集更新包，版本号：" << fileVersion;
+                }
+
+                // 收集到候选列表中，后续统一排序
+                pendingUpdateVersions.append(versionStr);
+                if (fileVersion > highestVersion) {
+                    highestVersion = fileVersion;
+                    highestVersionFile = versionStr;
+                }
             } else {
-                qDebug() << "  版本号不高于当前最高版本：" << fileVersion << "<=" << highestVersion;
+                qDebug() << "  版本号不高于当前版本，且当前非 ForceUpdate 模式：" << fileVersion << "<=" << currentVersion;
             }
         }
         
-        qDebug() << "扫描完成，最高版本号：" << highestVersion << "，当前版本号：" << currentVersion;
-        currentMaxClientVersion = highestVersionFile;
-        
-        if (highestVersion > currentVersion) {
-            qDebug() << "【发现更新】找到新版本更新包：" << highestVersionFile << "，准备通知客户端";
+        // 去重并按版本号排序（升序）
+        if (!pendingUpdateVersions.isEmpty())
+        {
+            // 使用临时列表对 (versionInt, versionStr) 排序
+            QList<QPair<int, QString>> versionPairs;
+            for (const QString &vStr : pendingUpdateVersions)
+            {
+                bool okVal = false;
+                int vInt = parseVersionToInt(vStr, okVal);
+                if (okVal)
+                {
+                    versionPairs.append(qMakePair(vInt, vStr));
+                }
+            }
+
+            std::sort(versionPairs.begin(), versionPairs.end(),
+                      [](const QPair<int, QString> &a, const QPair<int, QString> &b) {
+                          return a.first < b.first;
+                      });
+
+            pendingUpdateVersions.clear();
+            for (const auto &pair : versionPairs)
+            {
+                if (!pendingUpdateVersions.contains(pair.second))
+                {
+                    pendingUpdateVersions.append(pair.second);
+                }
+            }
+        }
+
+        qDebug() << "扫描完成，高于当前版本的更新包数量：" << pendingUpdateVersions.size()
+                 << "，当前版本号：" << currentVersion;
+
+        if (!pendingUpdateVersions.isEmpty()) {
+            highestVersionFile = pendingUpdateVersions.last();
+            currentMaxClientVersion = highestVersionFile;
+
+            qDebug() << "【发现更新】最高版本更新包：" << highestVersionFile;
             if (!isForceUpdate) {
+                // 通知前端有新的最高版本可用
                 websocketClient->messageSend("checkHasNewUpdatePack:" + highestVersionFile);
                 qDebug() << "已发送更新通知：checkHasNewUpdatePack:" + highestVersionFile;
-            }else{
-                // websocketClient->messageSend("checkHasNewUpdatePack:" + highestVersionFile);
-                // qDebug() << "已发送更新通知：checkHasNewUpdatePack:" + highestVersionFile;
+            } else {
+                // 强制更新模式下，仅更新内部队列，不重复提示
+                qDebug() << "强制更新模式下，仅更新内部顺序更新队列";
             }
         } else {
             qDebug() << "【无更新】没有找到比当前版本" << currentVersion << "更高的版本，无需更新";
@@ -309,26 +484,63 @@ void QuarcsMonitor::updateCurrentClient(const QString &newFileVersion)
     // 查找匹配的更新包文件
     QString targetFile;
     foreach (const QString &file, dir.entryList(QDir::Files)) {
-        QStringList fileList = file.split(".");
-        QString fileVersion = fileList[0];
+        // 与 checkVueClientVersion 中保持一致的版本号提取逻辑：
+        // 支持：1.0.2.zip、1.0.2-suffix.zip 等文件名格式
+        QString baseName = file;
+        int lastDotIndex = baseName.lastIndexOf('.');
+        if (lastDotIndex > 0) {
+            baseName = baseName.left(lastDotIndex);   // 去掉扩展名 -> 1.0.2 或 1.0.2-suffix
+        }
+        QString fileVersion = baseName.split("-").at(0); // 取前缀部分 -> 1.0.2
+
+        qDebug() << "检查更新包文件是否匹配版本:" << file
+                 << "解析得到版本号:" << fileVersion
+                 << "目标版本:" << newFileVersion;
+
         if (fileVersion == newFileVersion) {
             targetFile = file;
             break;
         }
     }
-    
+
     if (targetFile.isEmpty()) {
         qDebug() << "未找到匹配版本" << newFileVersion << "的更新包";
         websocketClient->messageSend("update_error:0:No matching version update package found");
         return;
     }
-    
+
+    // 为了避免上一次解压残留的 /update 目录内容导致本次 unzip 出现
+    // “cannot delete old ... No such file or directory” 并返回非 0 退出码，
+    // 在每次解压前主动清理 UpdatePackPath/update 目录。
+    QDir updateTempDir(UpdatePackPath + "update");
+    if (updateTempDir.exists())
+    {
+        qDebug() << "在解压前清理上一次残留的 update 目录:" << updateTempDir.absolutePath();
+        if (!updateTempDir.removeRecursively())
+        {
+            qDebug() << "【警告】无法递归删除 update 临时目录，可能会导致 unzip 报错";
+        }
+    }
+
     // 异步解压文件
     unzipProcess = new QProcess(this);
     connect(unzipProcess, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
             this, &QuarcsMonitor::onUnzipFinished);
     connect(unzipProcess, &QProcess::errorOccurred,
             this, &QuarcsMonitor::onUnzipError);
+    
+    // 只监听错误输出（stderr），避免打印大量正常的 inflating 日志
+    unzipProcess->setProcessChannelMode(QProcess::SeparateChannels);
+    connect(unzipProcess, &QProcess::readyReadStandardError,
+            this, [this]() {
+                if (!unzipProcess) {
+                    return;
+                }
+                const QString err = QString::fromLocal8Bit(unzipProcess->readAllStandardError());
+                if (!err.trimmed().isEmpty()) {
+                    qDebug() << "unzip 错误/警告输出:" << err;
+                }
+            });
     
     QString command = "unzip -o " + UpdatePackPath + targetFile + " -d " + UpdatePackPath;
     unzipProcess->start(command);
@@ -338,10 +550,32 @@ void QuarcsMonitor::updateCurrentClient(const QString &newFileVersion)
 
 void QuarcsMonitor::onUnzipFinished(int exitCode, QProcess::ExitStatus exitStatus)
 {
+    qDebug() << "unzip 进程结束, exitCode =" << exitCode
+             << ", exitStatus =" << exitStatus;
+
+    // 进程结束后再读一次错误缓冲区，避免遗漏最后一小段错误信息
+    if (unzipProcess) {
+        const QString remaining = QString::fromLocal8Bit(unzipProcess->readAllStandardError());
+        if (!remaining.isEmpty()) {
+            qDebug() << "unzip 结束时剩余错误/警告输出:" << remaining;
+        }
+    }
+
     if (exitCode != 0 || exitStatus != QProcess::NormalExit) {
         qDebug() << "解压失败，退出代码:" << exitCode;
         websocketClient->messageSend("update_error:0:Failed to extract update package");
+
+        // 如果当前处于顺序更新模式，解压失败也要视为该步骤失败，终止顺序更新流程
+        if (isSequentialUpdate)
+        {
+            qDebug() << "顺序更新在索引" << currentUpdateIndex << "处解压失败，终止后续更新";
+            isSequentialUpdate = false;
+            pendingUpdateVersions.clear();
+            websocketClient->messageSend("update_sequence_failed:" + QString::number(currentUpdateIndex));
+        }
+
         unzipProcess->deleteLater();
+        unzipProcess = nullptr;
         return;
     }
     
@@ -370,7 +604,7 @@ void QuarcsMonitor::onUnzipFinished(int exitCode, QProcess::ExitStatus exitStatu
     connect(updateProcess, &QProcess::errorOccurred,
             this, &QuarcsMonitor::onUpdateProcessError);
     
-    updateProcess->start("sudo", QStringList() << "bash" << "Update.sh" << "-r");
+    updateProcess->start("sudo", QStringList() << "bash" << "Update.sh");
     
     unzipProcess->deleteLater();
     unzipProcess = nullptr;
@@ -379,7 +613,17 @@ void QuarcsMonitor::onUnzipFinished(int exitCode, QProcess::ExitStatus exitStatu
 void QuarcsMonitor::onUnzipError(QProcess::ProcessError error)
 {
     qDebug() << "解压过程出错:" << error;
-    websocketClient->messageSend("update_error:0:Error during extraction process");
+    websocketClient->messageSend("update_error:0:Error during extraction process:" + error.toString());
+
+    // 顺序更新模式下，解压过程报错同样要中止整个顺序更新队列
+    if (isSequentialUpdate)
+    {
+        qDebug() << "顺序更新在索引" << currentUpdateIndex << "处解压进程错误，终止后续更新";
+        isSequentialUpdate = false;
+        pendingUpdateVersions.clear();
+        websocketClient->messageSend("update_sequence_failed:" + QString::number(currentUpdateIndex));
+    }
+
     unzipProcess->deleteLater();
     unzipProcess = nullptr;
 }
@@ -430,17 +674,35 @@ void QuarcsMonitor::onUpdateProcessOutput()
 
 void QuarcsMonitor::onUpdateProcessFinished(int exitCode, QProcess::ExitStatus exitStatus)
 {
-    if (exitCode != 0 || exitStatus != QProcess::NormalExit) {
+    bool success = (exitCode == 0 && exitStatus == QProcess::NormalExit);
+
+    if (!success) {
         qDebug() << "更新失败，退出代码:" << exitCode;
         websocketClient->messageSend("update_failed:" + QString::number(exitCode));
     } else {
         qDebug() << "更新脚本执行完成";
     }
-    
-    // this->checkVueClientVersion(true);
-    
+
     updateProcess->deleteLater();
     updateProcess = nullptr;
+
+    // 如果处于顺序更新模式，则根据结果决定是否继续后续更新包
+    if (isSequentialUpdate)
+    {
+        if (success)
+        {
+            // 当前步骤成功，继续执行下一个更新包
+            startNextUpdateInQueue();
+        }
+        else
+        {
+            // 当前步骤失败，终止后续更新
+            qDebug() << "顺序更新在索引" << currentUpdateIndex << "处失败，终止后续更新";
+            isSequentialUpdate = false;
+            pendingUpdateVersions.clear();
+            websocketClient->messageSend("update_sequence_failed:" + QString::number(currentUpdateIndex));
+        }
+    }
 }
 
 void QuarcsMonitor::onUpdateProcessError(QProcess::ProcessError error)
@@ -454,13 +716,70 @@ void QuarcsMonitor::onUpdateProcessError(QProcess::ProcessError error)
 void QuarcsMonitor::forceUpdate()
 {
     qDebug() << "ForceUpdate";
-    // 检查当前最新版本
+    // 重新检查并构建顺序更新队列，然后启动顺序更新
     checkVueClientVersion(true);
-    if (!currentMaxClientVersion.isEmpty()) {
-        // 更新当前客户端
-        updateCurrentClient(currentMaxClientVersion);
-    }else{
-        qDebug() << "No update pack found";
-        websocketClient->messageSend("No_update_pack_found");
+    startSequentialUpdate();
+}
+
+// 启动顺序更新流程
+void QuarcsMonitor::startSequentialUpdate()
+{
+    qDebug() << "startSequentialUpdate called, 当前待更新包数量:" << pendingUpdateVersions.size();
+
+    // 若队列为空，则尝试重新扫描一次
+    if (pendingUpdateVersions.isEmpty())
+    {
+        qDebug() << "pendingUpdateVersions 为空，重新检查更新包";
+        checkVueClientVersion(true);
     }
+
+    if (pendingUpdateVersions.isEmpty())
+    {
+        qDebug() << "没有可用的更新包，顺序更新结束";
+        websocketClient->messageSend("No_update_pack_found");
+        return;
+    }
+
+    isSequentialUpdate = true;
+    currentUpdateIndex = -1;
+
+    // 通知前端顺序更新开始，总步骤数
+    websocketClient->messageSend("update_sequence_start:" + QString::number(pendingUpdateVersions.size()));
+
+    startNextUpdateInQueue();
+}
+
+// 执行队列中的下一个更新包
+void QuarcsMonitor::startNextUpdateInQueue()
+{
+    if (!isSequentialUpdate)
+    {
+        qDebug() << "startNextUpdateInQueue 在非顺序更新模式下被调用，忽略";
+        return;
+    }
+
+    currentUpdateIndex++;
+
+    if (currentUpdateIndex >= pendingUpdateVersions.size())
+    {
+        qDebug() << "所有更新包已顺序执行完成";
+        isSequentialUpdate = false;
+        websocketClient->messageSend("update_sequence_finished");
+        pendingUpdateVersions.clear();
+        return;
+    }
+
+    const QString version = pendingUpdateVersions.at(currentUpdateIndex);
+    qDebug() << "开始顺序更新，第" << (currentUpdateIndex + 1)
+             << "个版本：" << version
+             << "，总共：" << pendingUpdateVersions.size();
+
+    // 通知前端当前执行到第几个版本
+    websocketClient->messageSend("update_sequence_step:"
+                                 + QString::number(currentUpdateIndex + 1) + ":"
+                                 + QString::number(pendingUpdateVersions.size()) + ":"
+                                 + version);
+
+    // 启动当前版本的单次更新流程
+    updateCurrentClient(version);
 }

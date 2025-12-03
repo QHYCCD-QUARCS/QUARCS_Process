@@ -13,6 +13,14 @@ int main(int argc, char *argv[])
     QCoreApplication a(argc, argv);
     a.setApplicationName("QMANAGE");
     a.setApplicationVersion("1.0");
+
+    // 在启动当前进程之前，尝试杀掉已存在的旧实例，避免同时运行多个
+    // 这里依赖进程名 "QMANAGE"（通过 prctl 设置），
+    // 若没有正在运行的旧实例，pkill 会返回非 0，可安全忽略。
+    int killResult = system("pkill -f 'QMANAGE'");
+    (void)killResult; // 避免未使用警告
+    // 简单等待一小段时间，给旧进程留出退出时间（可按需调整或去掉）
+    usleep(300 * 1000); // 300ms
     
     // Command line parser
     QCommandLineParser parser;
