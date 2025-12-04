@@ -75,6 +75,12 @@ private:
     // Qt 服务器运行状态，用于只在状态变化（特别是“由运行变为停止”）时打印/上报
     bool lastQtServerRunning = false;
 
+    // 通过 QProcess 管理的 QT 端进程，只杀掉由当前监控程序启动的这一份
+    QProcess *qtServerProcess = nullptr;
+
+    // 程序启动时，检测 QT 端是否已经在运行，如果没有则默认拉起一份
+    void autoStartQtIfNotRunning();
+
     // 启动/推进顺序更新流程
     void startSequentialUpdate();
     void startNextUpdateInQueue();

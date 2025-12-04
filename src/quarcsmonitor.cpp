@@ -71,18 +71,26 @@ QuarcsMonitor::QuarcsMonitor(QObject *parent) : QObject(parent)
     }
     qDebug() << "QuarcsMonitor 当前全局总版本号:" << totalVersion;
 
+    // 程序启动时，默认检测并必要时拉起 QT 端
+    // 使用 singleShot 避免在构造函数中直接启动外部进程
+    QTimer::singleShot(1500, this, [this]() {
+        autoStartQtIfNotRunning();
+    });
+
     QTimer::singleShot(1000, this, &QuarcsMonitor::monitorProcess);
 }
 
 void QuarcsMonitor::monitorProcess()
 {
-    // 创建一个QProcess对象来获取进程的信息
-    QProcess process;
-    process.start("pgrep QUARCS");
-    process.waitForFinished();
-    QString output = process.readAllStandardOutput();
-    // 如果进程正在运行，output将不会为空
-    bool processRunning = !(output.isEmpty() || output == "");
+    // 只依据当前进程管理的 qtServerProcess 状态来判断 QT 端是否在运行，
+    // 不再通过 pgrep 等手段检测系统中其它同名进程，做到“只认自己这份 QProcess”。
+    bool processRunning = false;
+
+    if (qtServerProcess && qtServerProcess->state() != QProcess::NotRunning)
+    {
+        // 由本监控程序通过 QProcess 启动的 QT 端仍在运行
+        processRunning = true;
+    }
 
     if (!processRunning) {
         // 如果当前处于顺序更新流程中，则认为 QT 服务器可能因更新而暂时关闭，
@@ -245,6 +253,21 @@ void QuarcsMonitor::tryGetHostAddress()
     }
 }
 
+// 程序启动后，自动检查一次 QT 端是否已运行；如果未运行则默认拉起一份
+void QuarcsMonitor::autoStartQtIfNotRunning()
+{
+    // 只关心由当前监控程序管理的这一份 QT 端：
+    // 如果 qtServerProcess 还在运行，则认为已启动；否则自动拉起一份。
+    if (qtServerProcess && qtServerProcess->state() != QProcess::NotRunning)
+    {
+        qDebug() << "autoStartQtIfNotRunning: QT Server already running via QProcess, skip auto start.";
+        return;
+    }
+
+    qDebug() << "autoStartQtIfNotRunning: QT Server not running (or not managed yet), start one instance.";
+    startQTServer();
+}
+
 void QuarcsMonitor::receivedMessage(const QString &message)
 {
     QStringList messageList = message.split(":");
@@ -279,9 +302,9 @@ void QuarcsMonitor::reRunQTServer()
     isRestarting = true;
     restartStartTime = QDateTime::currentDateTime();
     checkQtServerLostCount = 0;
-    
+
     killQTServer();
-    
+
     // 使用QTimer替代sleep，避免阻塞主线程
     if (!restartTimer) {
         restartTimer = new QTimer(this);
@@ -294,24 +317,97 @@ void QuarcsMonitor::reRunQTServer()
 
 void QuarcsMonitor::startQTServer()
 {
-    qDebug() << "Re-running QT Server";
-    
-    int result = system("lxterminal -e bash -c 'cd /home/quarcs/workspace/QUARCS/QUARCS_QT-SeverProgram/src/BUILD && ./client ;$SHELL' &");
-    
-    if (result != 0) {
-        qDebug() << "Failed to re-run QT Server";
+    qDebug() << "Re-running QT Server via QProcess";
+
+    // 如果之前已经有一个 QProcess 在管理 QT 端，先清理掉
+    if (qtServerProcess)
+    {
+        if (qtServerProcess->state() != QProcess::NotRunning)
+        {
+            qDebug() << "Previous QT Server process still running, killing it first";
+            qtServerProcess->kill();
+            qtServerProcess->waitForFinished(3000);
+        }
+        qtServerProcess->deleteLater();
+        qtServerProcess = nullptr;
+    }
+
+    qtServerProcess = new QProcess(this);
+
+    // 直接由 QProcess 启动 QT 端 ./client，本监控程序只认并管理这一份进程，
+    // 不再依赖外部终端进程（如 lxterminal）的存活状态，避免“窗口在但监控认为未启动”的情况。
+    qtServerProcess->setWorkingDirectory("/home/quarcs/workspace/QUARCS/QUARCS_QT-SeverProgram/src/BUILD");
+    qtServerProcess->setProgram("./client");
+    qtServerProcess->setProcessChannelMode(QProcess::MergedChannels);
+
+    // 如需查看 client 的标准输出，可以通过 qDebug 打印出来，后续也可以改为写入日志文件
+    connect(qtServerProcess, &QProcess::readyReadStandardOutput,
+            this, [this]() {
+                if (!qtServerProcess) return;
+                const QString out = QString::fromLocal8Bit(qtServerProcess->readAllStandardOutput());
+                if (!out.trimmed().isEmpty()) {
+                    qDebug() << "QT Server stdout:" << out;
+                }
+            });
+
+    connect(qtServerProcess,
+            QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+            this,
+            [this](int exitCode, QProcess::ExitStatus exitStatus) {
+                qDebug() << "QT Server process finished, exitCode =" << exitCode
+                         << ", exitStatus =" << exitStatus;
+
+                if (qtServerProcess) {
+                    qtServerProcess->deleteLater();
+                    qtServerProcess = nullptr;
+                }
+
+                // 如果是在重启流程中结束的，也认为重启流程到此结束
+                if (isRestarting) {
+                    isRestarting = false;
+                }
+            });
+
+    connect(qtServerProcess, &QProcess::errorOccurred,
+            this, [this](QProcess::ProcessError error) {
+                qDebug() << "QT Server process error:" << error;
+            });
+
+    qtServerProcess->start();
+
+    if (!qtServerProcess->waitForStarted(5000)) {
+        qDebug() << "Failed to start QT Server via QProcess, error:"
+                 << qtServerProcess->errorString();
         isRestarting = false;
-    } else {
-        // qDebug() << "QT Server restart initiated, timeout set to" << restartTimeout << "seconds";
+        qtServerProcess->deleteLater();
+        qtServerProcess = nullptr;
     }
 }
 
 void QuarcsMonitor::killQTServer()
 {
-    int result = system("pkill -f 'QUARCS'");
-    if (result != 0) {
-        qDebug() << "Failed to kill QT Server";
+    // 使用 QProcess 管理 QT 端，只杀掉由当前监控程序启动的这一份，
+    // 不再通过 pkill 之类的命令去模糊匹配进程名，避免误杀自身和其它服务。
+    if (!qtServerProcess) {
+        qDebug() << "qtServerProcess is null, no QT Server to kill";
+        return;
     }
+
+    qDebug() << "Killing QT Server process via QProcess";
+
+    if (qtServerProcess->state() != QProcess::NotRunning)
+    {
+        // 优先尝试优雅结束
+        qtServerProcess->terminate();
+        if (!qtServerProcess->waitForFinished(5000)) {
+            qDebug() << "QT Server did not terminate gracefully, forcing kill";
+            qtServerProcess->kill();
+            qtServerProcess->waitForFinished(3000);
+        }
+    }
+
+    qtServerProcess->deleteLater();
+    qtServerProcess = nullptr;
 }
 
 void QuarcsMonitor::checkVueClientVersion(bool isForceUpdate)
