@@ -1,6 +1,7 @@
 #include "quarcsmonitor.h"
 #include <unistd.h>
 #include <algorithm>
+#include <QCoreApplication>
 
 // 辅助函数：将版本号字符串转换为可比较的整数
 // 支持格式：
@@ -71,6 +72,13 @@ QuarcsMonitor::QuarcsMonitor(QObject *parent) : QObject(parent)
     }
     qDebug() << "QuarcsMonitor 当前全局总版本号:" << totalVersion;
 
+    // 绑定应用结束信号，在父进程退出时主动关闭并清理 QT 端进程
+    if (QCoreApplication::instance())
+    {
+        QObject::connect(QCoreApplication::instance(), &QCoreApplication::aboutToQuit,
+                         this, &QuarcsMonitor::onApplicationAboutToQuit);
+    }
+
     // 程序启动时，默认检测并必要时拉起 QT 端
     // 使用 singleShot 避免在构造函数中直接启动外部进程
     QTimer::singleShot(1500, this, [this]() {
@@ -105,6 +113,7 @@ void QuarcsMonitor::monitorProcess()
 
         // 只有在“之前认为服务器是运行状态 / 已经成功启动”时，
         // 才在第一次检测到进程不存在时打印/上报一次“进程结束”日志，避免持续刷屏。
+        // 这样在 QT 端从未成功启动过之前，不会给前端发出“结束/未启动”告警。
         if (lastQtServerRunning || qtServerInitSuccess)
         {
             led->setLedSpeed("slow");
@@ -130,8 +139,9 @@ void QuarcsMonitor::monitorProcess()
                 qDebug() << "Still waiting for QT Server to start, elapsed:" << elapsedSecs << "seconds";
             }
         }
-        // 仅当不处于重启过程中时才发送qtServerIsOver消息
-        else if (!isRestarting) {
+        // 仅当不处于重启过程中，且 QT 端曾经成功运行/初始化过时，才发送 qtServerIsOver。
+        // 避免在程序刚启动、QT 端尚未拉起之前就向前端发“已结束”信号。
+        else if (!isRestarting && (lastQtServerRunning || qtServerInitSuccess)) {
             websocketClient->messageSend("qtServerIsOver");
             qtServerInitSuccess = false;
         }
@@ -184,6 +194,10 @@ void QuarcsMonitor::monitorProcess()
 
 void QuarcsMonitor::checkQtServerInitSuccess()
 {
+    // 去掉 QT 端“卡死”判断：直接跳过原有计数逻辑，仅周期性回到进程监控。
+    QTimer::singleShot(1000, this, &QuarcsMonitor::monitorProcess);
+    return;
+
     // 在顺序更新过程中，不再向前端重复推送 QT 服务器未启动/阻塞的告警，
     // 以免与更新进度信息混在一起，造成前端 UI 混乱。
 
@@ -332,12 +346,15 @@ void QuarcsMonitor::startQTServer()
         qtServerProcess = nullptr;
     }
 
+    // 启动前，先尝试清理掉系统中可能残留的旧 QT 端进程（包括孤儿进程），
+    // 确保同一时间只有一份 client 在运行。
+    killAllQtServerProcesses();
+
     qtServerProcess = new QProcess(this);
 
-    // 直接由 QProcess 启动 QT 端 ./client，本监控程序只认并管理这一份进程，
-    // 不再依赖外部终端进程（如 lxterminal）的存活状态，避免“窗口在但监控认为未启动”的情况。
+    // 直接由 QProcess 启动 QT 端可执行文件，使用绝对路径，方便后续用 pkill -f 精确匹配并清理所有同名进程。
     qtServerProcess->setWorkingDirectory("/home/quarcs/workspace/QUARCS/QUARCS_QT-SeverProgram/src/BUILD");
-    qtServerProcess->setProgram("./client");
+    qtServerProcess->setProgram("/home/quarcs/workspace/QUARCS/QUARCS_QT-SeverProgram/src/BUILD/client");
     qtServerProcess->setProcessChannelMode(QProcess::MergedChannels);
 
     // 如需查看 client 的标准输出，可以通过 qDebug 打印出来，后续也可以改为写入日志文件
@@ -408,6 +425,34 @@ void QuarcsMonitor::killQTServer()
 
     qtServerProcess->deleteLater();
     qtServerProcess = nullptr;
+}
+
+// 杀掉当前机器上所有与 QT 端可执行文件路径匹配的旧进程（包括孤儿进程）
+void QuarcsMonitor::killAllQtServerProcesses()
+{
+    // 这里使用较为精确的匹配：仅匹配包含 client 可执行文件完整路径的进程命令行，
+    // 避免误杀其它无关进程。
+    const QString targetPath = "/home/quarcs/workspace/QUARCS/QUARCS_QT-SeverProgram/src/BUILD/client";
+
+    qDebug() << "killAllQtServerProcesses: try to kill any existing QT server processes with path:" << targetPath;
+
+    int exitCode = QProcess::execute("pkill", QStringList() << "-f" << targetPath);
+    if (exitCode != 0)
+    {
+        qDebug() << "killAllQtServerProcesses: pkill returned code" << exitCode
+                 << "(may mean没有匹配的进程或命令不可用)";
+    }
+}
+
+void QuarcsMonitor::onApplicationAboutToQuit()
+{
+    qDebug() << "QuarcsMonitor: application about to quit, stopping QT server process.";
+
+    // 先关闭由当前监控程序管理的这一份
+    killQTServer();
+
+    // 再作为保险，尝试清理所有可能残留的 QT 端进程（包括孤儿）
+    killAllQtServerProcesses();
 }
 
 void QuarcsMonitor::checkVueClientVersion(bool isForceUpdate)

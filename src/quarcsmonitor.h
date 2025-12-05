@@ -36,6 +36,7 @@ public slots:
     void checkQtServerInitSuccess();
     void killQTServer();
     void reRunQTServer();
+    void onApplicationAboutToQuit();
     void checkVueClientVersion(bool isForceUpdate = false);
     void updateCurrentClient(const QString &fileVersion);
     void forceUpdate();
@@ -80,6 +81,9 @@ private:
 
     // 程序启动时，检测 QT 端是否已经在运行，如果没有则默认拉起一份
     void autoStartQtIfNotRunning();
+
+    // 杀掉当前机器上所有与 QT 端可执行文件路径匹配的旧进程（包括孤儿进程）
+    void killAllQtServerProcesses();
 
     // 启动/推进顺序更新流程
     void startSequentialUpdate();
