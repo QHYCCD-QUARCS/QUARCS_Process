@@ -2,6 +2,7 @@
 #include <unistd.h>
 #include <algorithm>
 #include <QCoreApplication>
+#include <cstdio>
 
 // 辅助函数：将版本号字符串转换为可比较的整数
 // 支持格式：
@@ -177,9 +178,9 @@ void QuarcsMonitor::monitorProcess()
 
         if (canSendTestSignal)
         {
-            websocketClient->messageSend("testQtServerProcess");
-            lastTestQtServerProcessTime = now;
-            qDebug() << "发送 testQtServerProcess 检测信号";
+            // websocketClient->messageSend("testQtServerProcess");
+            // lastTestQtServerProcessTime = now;
+            // qDebug() << "发送 testQtServerProcess 检测信号";
         }
 
         QTimer::singleShot(1000, this, SLOT(checkQtServerInitSuccess()));
@@ -357,13 +358,15 @@ void QuarcsMonitor::startQTServer()
     qtServerProcess->setProgram("/home/quarcs/workspace/QUARCS/QUARCS_QT-SeverProgram/src/BUILD/client");
     qtServerProcess->setProcessChannelMode(QProcess::MergedChannels);
 
-    // 如需查看 client 的标准输出，可以通过 qDebug 打印出来，后续也可以改为写入日志文件
+    // 直接透传 QT 端标准输出到当前进程的 stdout，保持原始格式（不加前缀、不转义换行/中文）
     connect(qtServerProcess, &QProcess::readyReadStandardOutput,
             this, [this]() {
                 if (!qtServerProcess) return;
-                const QString out = QString::fromLocal8Bit(qtServerProcess->readAllStandardOutput());
-                if (!out.trimmed().isEmpty()) {
-                    qDebug() << "QT Server stdout:" << out;
+                const QByteArray data = qtServerProcess->readAllStandardOutput();
+                if (!data.isEmpty()) {
+                    // 使用 C 标准库直接写出原始字节，避免 QString 转码导致中文乱码或转义 \n
+                    std::fwrite(data.constData(), 1, static_cast<size_t>(data.size()), stdout);
+                    std::fflush(stdout);
                 }
             });
 
