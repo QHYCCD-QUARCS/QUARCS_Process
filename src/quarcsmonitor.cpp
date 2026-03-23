@@ -351,6 +351,9 @@ void QuarcsMonitor::startQTServer()
     // 确保同一时间只有一份 client 在运行。
     killAllQtServerProcesses();
 
+    // 上传时若无法覆盖运行中的 client，会先写入 clientnew；此处进程已结束后再替换为 client
+    applyPendingClientBinaryIfNeeded();
+
     qtServerProcess = new QProcess(this);
 
     // 直接由 QProcess 启动 QT 端可执行文件，使用绝对路径，方便后续用 pkill -f 精确匹配并清理所有同名进程。
@@ -444,6 +447,28 @@ void QuarcsMonitor::killAllQtServerProcesses()
     {
         qDebug() << "killAllQtServerProcesses: pkill returned code" << exitCode
                  << "(may mean没有匹配的进程或命令不可用)";
+    }
+}
+
+void QuarcsMonitor::applyPendingClientBinaryIfNeeded()
+{
+    const QString clientNewPath = QStringLiteral("/home/quarcs/workspace/QUARCS/QUARCS_QT-SeverProgram/src/BUILD/clientnew");
+    const QString clientPath = QStringLiteral("/home/quarcs/workspace/QUARCS/QUARCS_QT-SeverProgram/src/BUILD/client");
+
+    if (!QFile::exists(clientNewPath))
+        return;
+
+    qDebug() << "applyPendingClientBinaryIfNeeded: clientnew present, replacing client before start";
+
+    if (QFile::exists(clientPath)) {
+        if (!QFile::remove(clientPath)) {
+            qWarning() << "applyPendingClientBinaryIfNeeded: failed to remove old client, skip rename";
+            return;
+        }
+    }
+
+    if (!QFile::rename(clientNewPath, clientPath)) {
+        qWarning() << "applyPendingClientBinaryIfNeeded: failed to rename clientnew -> client";
     }
 }
 

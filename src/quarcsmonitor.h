@@ -85,6 +85,9 @@ private:
     // 杀掉当前机器上所有与 QT 端可执行文件路径匹配的旧进程（包括孤儿进程）
     void killAllQtServerProcesses();
 
+    /// 若 BUILD 目录存在 clientnew（上传时因 client 被占用而暂存），在已结束旧进程后替换为 client
+    void applyPendingClientBinaryIfNeeded();
+
     // 启动/推进顺序更新流程
     void startSequentialUpdate();
     void startNextUpdateInQueue();
