@@ -88,6 +88,9 @@ private:
     /// 若 BUILD 目录存在 clientnew（上传时因 client 被占用而暂存），在已结束旧进程后替换为 client
     void applyPendingClientBinaryIfNeeded();
 
+    /// 解析本次应启动的 Qt 可执行文件路径：优先将 clientnew 应用到 client；若替换失败则直接回退启动 clientnew
+    QString resolveQtServerProgramPath();
+
     // 启动/推进顺序更新流程
     void startSequentialUpdate();
     void startNextUpdateInQueue();

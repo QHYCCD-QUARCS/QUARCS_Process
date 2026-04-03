@@ -2,6 +2,7 @@
 #include <unistd.h>
 #include <algorithm>
 #include <QCoreApplication>
+#include <QFileInfo>
 #include <cstdio>
 
 // 辅助函数：将版本号字符串转换为可比较的整数
@@ -43,6 +44,19 @@ static int parseVersionToInt(const QString &versionStr, bool &ok)
     }
 
     return 0;
+}
+
+static QString describeFileState(const QString &path)
+{
+    QFileInfo info(path);
+    if (!info.exists())
+        return QStringLiteral("exists=false");
+
+    return QStringLiteral("exists=true, size=%1, readable=%2, writable=%3, executable=%4")
+        .arg(info.size())
+        .arg(info.isReadable())
+        .arg(info.isWritable())
+        .arg(info.isExecutable());
 }
 
 QuarcsMonitor::QuarcsMonitor(QObject *parent) : QObject(parent)
@@ -352,14 +366,20 @@ void QuarcsMonitor::startQTServer()
     killAllQtServerProcesses();
 
     // 上传时若无法覆盖运行中的 client，会先写入 clientnew；此处进程已结束后再替换为 client
-    applyPendingClientBinaryIfNeeded();
+    const QString qtProgramPath = resolveQtServerProgramPath();
+    if (qtProgramPath.isEmpty()) {
+        qWarning() << "startQTServer: no runnable Qt server binary found, abort start";
+        isRestarting = false;
+        return;
+    }
 
     qtServerProcess = new QProcess(this);
 
     // 直接由 QProcess 启动 QT 端可执行文件，使用绝对路径，方便后续用 pkill -f 精确匹配并清理所有同名进程。
     qtServerProcess->setWorkingDirectory("/home/quarcs/workspace/QUARCS/QUARCS_QT-SeverProgram/src/BUILD");
-    qtServerProcess->setProgram("/home/quarcs/workspace/QUARCS/QUARCS_QT-SeverProgram/src/BUILD/client");
+    qtServerProcess->setProgram(qtProgramPath);
     qtServerProcess->setProcessChannelMode(QProcess::MergedChannels);
+    qDebug() << "startQTServer: launching binary:" << qtProgramPath;
 
     // 直接透传 QT 端标准输出到当前进程的 stdout，保持原始格式（不加前缀、不转义换行/中文）
     connect(qtServerProcess, &QProcess::readyReadStandardOutput,
@@ -436,17 +456,20 @@ void QuarcsMonitor::killQTServer()
 // 杀掉当前机器上所有与 QT 端可执行文件路径匹配的旧进程（包括孤儿进程）
 void QuarcsMonitor::killAllQtServerProcesses()
 {
-    // 这里使用较为精确的匹配：仅匹配包含 client 可执行文件完整路径的进程命令行，
-    // 避免误杀其它无关进程。
-    const QString targetPath = "/home/quarcs/workspace/QUARCS/QUARCS_QT-SeverProgram/src/BUILD/client";
+    const QStringList targetPaths = {
+        QStringLiteral("/home/quarcs/workspace/QUARCS/QUARCS_QT-SeverProgram/src/BUILD/client"),
+        QStringLiteral("/home/quarcs/workspace/QUARCS/QUARCS_QT-SeverProgram/src/BUILD/clientnew")
+    };
 
-    qDebug() << "killAllQtServerProcesses: try to kill any existing QT server processes with path:" << targetPath;
+    for (const QString &targetPath : targetPaths) {
+        qDebug() << "killAllQtServerProcesses: try to kill any existing QT server processes with path:" << targetPath;
 
-    int exitCode = QProcess::execute("pkill", QStringList() << "-f" << targetPath);
-    if (exitCode != 0)
-    {
-        qDebug() << "killAllQtServerProcesses: pkill returned code" << exitCode
-                 << "(may mean没有匹配的进程或命令不可用)";
+        const int exitCode = QProcess::execute("pkill", QStringList() << "-f" << targetPath);
+        if (exitCode != 0)
+        {
+            qDebug() << "killAllQtServerProcesses: pkill returned code" << exitCode
+                     << "(may mean没有匹配的进程或命令不可用)";
+        }
     }
 }
 
@@ -458,18 +481,61 @@ void QuarcsMonitor::applyPendingClientBinaryIfNeeded()
     if (!QFile::exists(clientNewPath))
         return;
 
-    qDebug() << "applyPendingClientBinaryIfNeeded: clientnew present, replacing client before start";
+    qDebug() << "applyPendingClientBinaryIfNeeded: clientnew present, replacing client before start"
+             << "| clientnew:" << describeFileState(clientNewPath)
+             << "| client:" << describeFileState(clientPath);
 
     if (QFile::exists(clientPath)) {
-        if (!QFile::remove(clientPath)) {
-            qWarning() << "applyPendingClientBinaryIfNeeded: failed to remove old client, skip rename";
+        QFile clientFile(clientPath);
+        if (!clientFile.remove()) {
+            qWarning() << "applyPendingClientBinaryIfNeeded: failed to remove old client, skip rename"
+                       << "| path:" << clientPath
+                       << "| error:" << clientFile.errorString()
+                       << "| state:" << describeFileState(clientPath);
             return;
         }
+
+        qDebug() << "applyPendingClientBinaryIfNeeded: removed old client successfully"
+                 << "| path:" << clientPath;
     }
 
-    if (!QFile::rename(clientNewPath, clientPath)) {
-        qWarning() << "applyPendingClientBinaryIfNeeded: failed to rename clientnew -> client";
+    QFile clientNewFile(clientNewPath);
+    if (!clientNewFile.rename(clientPath)) {
+        qWarning() << "applyPendingClientBinaryIfNeeded: failed to rename clientnew -> client"
+                   << "| from:" << clientNewPath
+                   << "| to:" << clientPath
+                   << "| error:" << clientNewFile.errorString()
+                   << "| clientnew:" << describeFileState(clientNewPath)
+                   << "| client:" << describeFileState(clientPath);
+        return;
     }
+
+    qDebug() << "applyPendingClientBinaryIfNeeded: rename clientnew -> client succeeded"
+             << "| client:" << describeFileState(clientPath);
+}
+
+QString QuarcsMonitor::resolveQtServerProgramPath()
+{
+    const QString clientNewPath = QStringLiteral("/home/quarcs/workspace/QUARCS/QUARCS_QT-SeverProgram/src/BUILD/clientnew");
+    const QString clientPath = QStringLiteral("/home/quarcs/workspace/QUARCS/QUARCS_QT-SeverProgram/src/BUILD/client");
+
+    if (QFile::exists(clientNewPath)) {
+        applyPendingClientBinaryIfNeeded();
+
+        if (QFile::exists(clientPath)) {
+            qDebug() << "resolveQtServerProgramPath: clientnew applied successfully, will launch client";
+            return clientPath;
+        }
+
+        qWarning() << "resolveQtServerProgramPath: clientnew exists but replace failed, falling back to launch clientnew directly";
+        return clientNewPath;
+    }
+
+    if (QFile::exists(clientPath))
+        return clientPath;
+
+    qWarning() << "resolveQtServerProgramPath: neither client nor clientnew exists";
+    return QString();
 }
 
 void QuarcsMonitor::onApplicationAboutToQuit()
